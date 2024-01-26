@@ -8,7 +8,7 @@ from .selection_utils import cossim_np, submodular_function, submodular_optimize
 
 
 class Submodular(EarlyTrain):
-    def __init__(self, network,dst_train, args, fraction=0.5, random_seed=None, device=None, task_id = None, epochs=200, balance=True,
+    def __init__(self, network,dst_train, args, fraction=0.5, random_seed=None, device=None, task_id=None, epochs=200, balance=True,
                  function="LogDeterminant", greedy="ApproximateLazyGreedy", metric="cossim", **kwargs):
         super(Submodular, self).__init__(network, dst_train, args, fraction, random_seed, device, task_id, epochs, **kwargs)
 
@@ -82,10 +82,8 @@ class Submodular(EarlyTrain):
                                           bias_parameters_grads.view(batch_num, end_label,
                                                                      1).repeat(1, 1, self.embedding_dim)
 
-                print("TICK")
                 gradients.append(torch.cat([bias_parameters_grads, weight_parameters_grads.flatten(1)],
                                             dim=1).cpu().numpy())
-                print(len(gradients))
 
         gradients = np.concatenate(gradients, axis=0)
         return gradients
@@ -105,7 +103,7 @@ class Submodular(EarlyTrain):
                 end_label = (self.task_id + 1) * 10
                 for c in range(start_label, end_label):
                     c_indx = self.train_indx[self.dst_train.labels == c]
-                    print("c index", c_indx)
+                    #print("c index", c_indx)
                     # Calculate gradients into a matrix
                     gradients = self.calc_gradient(end_label,index=c_indx)
                     # Instantiate a submodular function
@@ -128,7 +126,7 @@ class Submodular(EarlyTrain):
                 selection_result = submod_optimizer.select(gain_function=submod_function.calc_gain,
                                                            update_state=submod_function.update_state)
 
-            self.model.no_grad = False
+            self._model.no_grad = False
         return {"indices": selection_result}
 
     def select(self, **kwargs):

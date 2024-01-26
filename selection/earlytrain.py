@@ -38,10 +38,10 @@ class EarlyTrain(CoresetMethod):
         batch_sampler = torch.utils.data.BatchSampler(trainset_permutation_inds, batch_size=self.args["selection_batch"],
                                                       drop_last=False)
         trainset_permutation_inds = list(batch_sampler)
-        print(len(self.dst_train))
+        #print(len(self.dst_train))
         train_loader = torch.utils.data.DataLoader(self.dst_train, shuffle=False, batch_sampler=batch_sampler,
                                                    num_workers=self.args["workers"], pin_memory=True)
-        print(len(train_loader))
+        #print(len(train_loader))
         for i, (_, inputs, targets) in enumerate(train_loader):
             inputs, targets = inputs.to(self._device), targets.to(self._device).long()
             # Forward propagation, compute loss, get predictions

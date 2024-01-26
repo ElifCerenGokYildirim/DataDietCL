@@ -120,6 +120,7 @@ class WA(BaseLearner):
             for i, (_, inputs, targets) in enumerate(train_loader):
                 inputs, targets = inputs.to(self._device), targets.to(self._device)
                 logits = self._network(inputs)["logits"]
+                print(f"Batch {i + 1}, Preds shape: {logits.shape}")
 
                 loss = F.cross_entropy(logits, targets)
                 optimizer.zero_grad()

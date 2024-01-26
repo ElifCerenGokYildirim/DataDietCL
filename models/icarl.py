@@ -14,6 +14,14 @@ from utils.toolkit import target2onehot, tensor2numpy
 import selection
 from selection.forgetting import Forgetting
 from selection.submodular import Submodular
+from selection.glister import Glister
+from selection.grand import GraNd
+from selection.herding import Herding
+from selection.kcentergreedy import kCenterGreedy
+from selection.uncertainty import Uncertainty
+from selection.craig import Craig
+from selection.gradmatch import GradMatch
+from selection.deepfool import DeepFool
 
 from torch.utils.data import ConcatDataset
 
@@ -28,7 +36,7 @@ init_weight_decay = 0.0005
 
 epochs = 1
 lrate = 0.1
-milestones = [80, 120]
+milestones = [60]
 lrate_decay = 0.1
 batch_size = 128
 weight_decay = 2e-4
@@ -71,7 +79,7 @@ class iCaRL(BaseLearner):
 
                            )
 
-        method = Submodular(self._network, train_dataset, args, args["fraction"], args["seed"], self._device, self._cur_task,  **selection_args)
+        method = DeepFool(self._network, train_dataset, args, args["fraction"], args["seed"], self._device, self._cur_task, **selection_args)
         subset = method.select()
         dst_subset = torch.utils.data.Subset(train_dataset, subset["indices"])
         if self._cur_task > 0:
@@ -83,18 +91,18 @@ class iCaRL(BaseLearner):
             )
 
             concatenated_dataset = ConcatDataset([memory_set, dst_subset])
-            print(len(concatenated_dataset))
+            #print(len(concatenated_dataset))
 
             self.train_loader = DataLoader(
                 concatenated_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers
             )
-            print(len(self.train_loader))
+            #print(len(self.train_loader))
         else:
 
             self.train_loader = DataLoader(
                 dst_subset, batch_size=batch_size, shuffle=True, num_workers=num_workers
             )
-            print(len(self.train_loader))
+            #print(len(self.train_loader))
 
         test_dataset = data_manager.get_dataset(
             np.arange(0, self._total_classes), source="test", mode="test"
@@ -139,13 +147,15 @@ class iCaRL(BaseLearner):
             self._update_representation(train_loader, test_loader, optimizer, scheduler)
 
     def _init_train(self, train_loader, test_loader, optimizer, scheduler):
+        for p in self._network.parameters():
+            p.requires_grad_(True)
         prog_bar = tqdm(range(init_epoch))
         for _, epoch in enumerate(prog_bar):
             self._network.train()
             losses = 0.0
             correct, total = 0, 0
             for i, (_, inputs, targets) in enumerate(train_loader):
-                print(targets)
+                #print(targets)
                 targets = targets.type(torch.LongTensor)
                 inputs, targets = inputs.to(self._device), targets.to(self._device)
                 logits = self._network(inputs)["logits"]
@@ -187,6 +197,8 @@ class iCaRL(BaseLearner):
         logging.info(info)
 
     def _update_representation(self, train_loader, test_loader, optimizer, scheduler):
+        for p in self._network.parameters():
+            p.requires_grad_(True)
         prog_bar = tqdm(range(epochs))
         for _, epoch in enumerate(prog_bar):
             self._network.train()
@@ -194,7 +206,7 @@ class iCaRL(BaseLearner):
             correct, total = 0, 0
             for i, (_, inputs, targets) in enumerate(train_loader):
                 targets = targets.type(torch.LongTensor)
-                print(targets)
+                #print(targets)
                 inputs, targets = inputs.to(self._device), targets.to(self._device)
                 logits = self._network(inputs)["logits"]
 
