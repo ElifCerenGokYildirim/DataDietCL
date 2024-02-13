@@ -7,6 +7,7 @@ class SubmodularFunction(object):
         self.n = len(index)
 
         self.already_selected = already_selected
+        #self.already_selected = already_selected if already_selected is not None else []
 
         assert similarity_kernel is not None or similarity_matrix is not None
 
@@ -16,6 +17,7 @@ class SubmodularFunction(object):
         if similarity_kernel is not None:
             assert callable(similarity_kernel)
             self.similarity_kernel = self._similarity_kernel(similarity_kernel)
+
         else:
             assert similarity_matrix.shape[0] == self.n and similarity_matrix.shape[1] == self.n
             self.similarity_matrix = similarity_matrix
@@ -80,6 +82,7 @@ class GraphCut(SubmodularFunction):
         if 'similarity_matrix' in kwargs:
             self.sim_matrix_cols_sum = np.sum(self.similarity_matrix, axis=0)
         self.all_idx = np.ones(self.n, dtype=bool)
+
 
     def _similarity_kernel(self, similarity_kernel):
         # Initialize a matrix to store similarity values of sample points.

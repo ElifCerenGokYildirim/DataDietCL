@@ -2,7 +2,6 @@ import copy
 import logging
 import torch
 from torch import nn
-
 from torch import set_grad_enabled
 
 from convs.cifar_resnet import resnet32
@@ -321,7 +320,7 @@ class IncrementalNetWithBias(BaseNet):
 
 
 class DERNet(nn.Module):
-    def __init__(self, args, pretrained):
+    def __init__(self, args, pretrained,record_embedding: bool = False):
         super(DERNet, self).__init__()
         self.convnet_type = args["convnet_type"]
         self.convnets = nn.ModuleList()
@@ -331,6 +330,7 @@ class DERNet(nn.Module):
         self.aux_fc = None
         self.task_sizes = []
         self.args = args
+        self.embedding_recorder = EmbeddingRecorder(record_embedding)
 
     @property
     def feature_dim(self):
@@ -343,15 +343,22 @@ class DERNet(nn.Module):
         features = torch.cat(features, 1)
         return features
 
+    def get_last_layer(self):
+        return self.fc
+
     def forward(self, x):
         features = [convnet(x)["features"] for convnet in self.convnets]
         features = torch.cat(features, 1)
+        #print("features", features)
 
         out = self.fc(features)  # {logics: self.fc(features)}
+        #print("out", out)
 
         aux_logits = self.aux_fc(features[:, -self.out_dim :])["logits"]
-
         out.update({"aux_logits": aux_logits, "features": features})
+        #print("out", out)
+        out = self.embedding_recorder(out)
+        #print("embedding out", out)
         return out
         """
         {
@@ -370,7 +377,9 @@ class DERNet(nn.Module):
 
         if self.out_dim is None:
             self.out_dim = self.convnets[-1].out_dim
+        #print("out dim", self.out_dim)
         fc = self.generate_fc(self.feature_dim, nb_classes)
+        #print("fc", fc)
         if self.fc is not None:
             nb_output = self.fc.out_features
             weight = copy.deepcopy(self.fc.weight.data)
@@ -382,9 +391,12 @@ class DERNet(nn.Module):
         self.fc = fc
 
         new_task_size = nb_classes - sum(self.task_sizes)
+        #print("new task size", new_task_size)
         self.task_sizes.append(new_task_size)
+        #print("task sizes", self.task_sizes)
 
         self.aux_fc = self.generate_fc(self.out_dim, new_task_size + 1)
+        #print("aux_fc", self.aux_fc.weight.shape)
 
     def generate_fc(self, in_dim, out_dim):
         fc = SimpleLinear(in_dim, out_dim)
@@ -427,8 +439,10 @@ class DERNet(nn.Module):
 
 
 class SimpleCosineIncrementalNet(BaseNet):
-    def __init__(self, args, pretrained):
+    def __init__(self, args, pretrained, record_embedding= False):
         super().__init__(args, pretrained)
+
+        self.embedding_recorder = EmbeddingRecorder(record_embedding)
 
     def update_fc(self, nb_classes, nextperiod_initialization=None):
         fc = self.generate_fc(self.feature_dim, nb_classes).cuda()
@@ -445,13 +459,24 @@ class SimpleCosineIncrementalNet(BaseNet):
         del self.fc
         self.fc = fc
 
+    def get_last_layer(self):
+        return self.fc
+
+    def forward(self, x):
+        x = self.convnet(x)
+        out = self.fc(x["features"])
+        out.update(x)
+        out = self.embedding_recorder(out)
+
+        return out
+
     def generate_fc(self, in_dim, out_dim):
         fc = CosineLinear(in_dim, out_dim)
         return fc
 
 
 class FOSTERNet(nn.Module):
-    def __init__(self, args, pretrained):
+    def __init__(self, args, pretrained,record_embedding: bool = False):
         super(FOSTERNet, self).__init__()
         self.convnet_type = args["convnet_type"]
         self.convnets = nn.ModuleList()
@@ -462,6 +487,7 @@ class FOSTERNet(nn.Module):
         self.task_sizes = []
         self.oldfc = None
         self.args = args
+        self.embedding_recorder = EmbeddingRecorder(record_embedding)
 
     @property
     def feature_dim(self):
@@ -473,6 +499,9 @@ class FOSTERNet(nn.Module):
         features = [convnet(x)["features"] for convnet in self.convnets]
         features = torch.cat(features, 1)
         return features
+
+    def get_last_layer(self):
+        return self.fc
 
     def forward(self, x):
         features = [convnet(x)["features"] for convnet in self.convnets]
@@ -487,6 +516,7 @@ class FOSTERNet(nn.Module):
             out.update({"old_logits": old_logits})
 
         out.update({"eval_logits": out["logits"]})
+        out = self.embedding_recorder(out)
         return out
 
     def update_fc(self, nb_classes):
@@ -706,7 +736,7 @@ class BEEFISONet(nn.Module):
 
 
 class AdaptiveNet(nn.Module):
-    def __init__(self, args, pretrained):
+    def __init__(self, args, pretrained,record_embedding: bool = False):
         super(AdaptiveNet, self).__init__()
         self.convnet_type = args["convnet_type"]
         self.TaskAgnosticExtractor , _ = get_convnet(args, pretrained) #Generalized blocks
@@ -718,18 +748,22 @@ class AdaptiveNet(nn.Module):
         self.aux_fc=None
         self.task_sizes = []
         self.args=args
+        self.embedding_recorder = EmbeddingRecorder(record_embedding)
 
     @property
     def feature_dim(self):
         if self.out_dim is None:
             return 0
         return self.out_dim*len(self.AdaptiveExtractors)
-    
+
     def extract_vector(self, x):
         base_feature_map = self.TaskAgnosticExtractor(x)
         features = [extractor(base_feature_map) for extractor in self.AdaptiveExtractors]
         features = torch.cat(features, 1)
         return features
+
+    def get_last_layer(self):
+        return self.fc
 
     def forward(self, x):
         base_feature_map = self.TaskAgnosticExtractor(x)
@@ -741,6 +775,7 @@ class AdaptiveNet(nn.Module):
 
         out.update({"aux_logits":aux_logits,"features":features})
         out.update({"base_features":base_feature_map})
+        out = self.embedding_recorder(out)
         return out
                 
         '''
@@ -762,7 +797,8 @@ class AdaptiveNet(nn.Module):
         if self.out_dim is None:
             logging.info(self.AdaptiveExtractors[-1])
             self.out_dim=self.AdaptiveExtractors[-1].feature_dim        
-        fc = self.generate_fc(self.feature_dim, nb_classes)             
+        fc = self.generate_fc(self.feature_dim, nb_classes)
+
         if self.fc is not None:
             nb_output = self.fc.out_features
             weight = copy.deepcopy(self.fc.weight.data)

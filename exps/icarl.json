@@ -10,7 +10,7 @@
     "model_name": "icarl",
     "convnet_type": "resnet32",
     "device": ["0"],
-    "seed": [1993],
+    "seed": [2024],
     "selection_epochs": 2,
     "uncertainty": "Entropy",
     "balance": true,

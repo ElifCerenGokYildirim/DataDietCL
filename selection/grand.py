@@ -7,7 +7,7 @@ import numpy as np
 
 
 class GraNd(EarlyTrain):
-    def __init__(self,network, dst_train, args, fraction=0.5, random_seed=None, device=None, task_id = None, epochs=200, repeat=10,
+    def __init__(self,network, dst_train, args, fraction=0.5, random_seed=None, device=None, task_id = None, epochs=200, repeat=1,
                  specific_model=None, balance=False, **kwargs):
         super().__init__(network, dst_train, args, fraction, random_seed,device,task_id, epochs, **kwargs)
         self.epochs = epochs

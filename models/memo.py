@@ -11,6 +11,19 @@ from models.base import BaseLearner
 from utils.inc_net import AdaptiveNet
 from utils.toolkit import count_parameters, target2onehot, tensor2numpy
 
+from selection.forgetting import Forgetting
+from selection.submodular import Submodular
+from selection.glister import Glister
+from selection.grand import GraNd
+from selection.herding import Herding
+from selection.kcentergreedy import kCenterGreedy
+from selection.uncertainty import Uncertainty
+from selection.craig import Craig
+from selection.gradmatch import GradMatch
+from selection.deepfool import DeepFool
+
+from torch.utils.data import ConcatDataset
+
 num_workers=8
 EPSILON = 1e-8
 batch_size = 64
@@ -40,7 +53,7 @@ class MEMO(BaseLearner):
         
         logging.info('Exemplar size: {}'.format(self.exemplar_size))
 
-    def incremental_train(self, data_manager):
+    def incremental_train(self, data_manager,args):
         self._cur_task += 1
         self._total_classes = self._known_classes + data_manager.get_task_size(self._cur_task)
         self._network.update_fc(self._total_classes)
@@ -63,18 +76,44 @@ class MEMO(BaseLearner):
             mode='train', 
             appendent=self._get_memory()
         )
-        self.train_loader = DataLoader(
-            train_dataset, 
-            batch_size=self.args["batch_size"], 
-            shuffle=True, 
-            num_workers=num_workers
-        )
-        
+        selection_args = dict(epochs=args["selection_epochs"],
+                              selection_method=args["uncertainty"],
+                              balance=args["balance"],
+                              greedy=args["submodular_greedy"],
+                              function=args["submodular"]
+                              )
+        selection_method = DeepFool(self._network, train_dataset, args, args["fraction"], args["seed"], self._device,
+                                      self._cur_task, **selection_args)
+        subset = selection_method.select()
+        dst_subset = torch.utils.data.Subset(train_dataset, subset["indices"])
+        if self._cur_task > 0:
+            memory_set = data_manager.get_dataset(
+                [],
+                source="train",
+                mode="train",
+                appendent=self._get_memory()
+            )
+
+            concatenated_dataset = ConcatDataset([memory_set, dst_subset])
+            # print(len(concatenated_dataset))
+
+            self.train_loader = DataLoader(
+                concatenated_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers
+            )
+            # print(len(self.train_loader))
+        else:
+
+            self.train_loader = DataLoader(
+                dst_subset, batch_size=batch_size, shuffle=True, num_workers=num_workers
+            )
+            # print(len(self.train_loader))
+
         test_dataset = data_manager.get_dataset(
             np.arange(0, self._total_classes), 
             source='test', 
             mode='test'
         )
+
         self.test_loader = DataLoader(
             test_dataset, 
             batch_size=self.args["batch_size"],
@@ -84,6 +123,21 @@ class MEMO(BaseLearner):
 
         if len(self._multiple_gpus) > 1:
             self._network = nn.DataParallel(self._network, self._multiple_gpus)
+
+        # BU KISIMA BAKMAK LAZIM SU AN CALISMIYOR AMA BOYLE BIRSEY LAZIM BURAYA
+        if selection_method == DeepFool:
+            for p in self._network.parameters():
+                p.requires_grad = True
+                print("Done")
+            if self._cur_task > 0:
+                print("I am not here")
+                for i in range(self._cur_task):
+                    for p in self._network.AdaptiveExtractors[i].parameters():
+                        if self.args['train_adaptive']:
+                            p.requires_grad = True
+                        else:
+                            p.requires_grad = False
+
         self._train(self.train_loader, self.test_loader)
         self.build_rehearsal_memory(data_manager, self.samples_per_class)
         if len(self._multiple_gpus) > 1:
@@ -180,9 +234,9 @@ class MEMO(BaseLearner):
             losses = 0.
             correct, total = 0, 0
             for i, (_, inputs, targets) in enumerate(train_loader):
+                targets = targets.type(torch.LongTensor)
                 inputs, targets = inputs.to(self._device), targets.to(self._device)
                 logits = self._network(inputs)['logits']
-
                 loss=F.cross_entropy(logits,targets) 
                 optimizer.zero_grad()
                 loss.backward()
@@ -214,8 +268,8 @@ class MEMO(BaseLearner):
             losses_aux=0.
             correct, total = 0, 0
             for i, (_, inputs, targets) in enumerate(train_loader):
+                targets = targets.type(torch.LongTensor)
                 inputs, targets = inputs.to(self._device), targets.to(self._device)
-
                 outputs= self._network(inputs)
                 logits,aux_logits=outputs["logits"],outputs["aux_logits"]
                 loss_clf=F.cross_entropy(logits,targets)

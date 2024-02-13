@@ -1,5 +1,6 @@
 import copy
-
+import os
+os.environ["KMP_DUPLICATE_LIB_OK"]="TRUE"
 from .earlytrain import EarlyTrain
 import torch
 from .selection_utils import FacilityLocation, submodular_optimizer

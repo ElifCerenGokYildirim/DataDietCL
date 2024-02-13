@@ -8,8 +8,8 @@ import numpy as np
 # https://github.com/mtoneva/example_forgetting
 
 class Forgetting(EarlyTrain):
-    def __init__(self, network, dst_train, args, fraction=0.5, random_seed=None, device=None,  epochs=200, balance=True, **kwargs):
-        super().__init__(network, dst_train, args, fraction, random_seed, device, epochs)
+    def __init__(self, network, dst_train, args, fraction=0.5, random_seed=None, device=None, task_id = None,  epochs=200, specific_model=None, balance=True, **kwargs):
+        super().__init__(network, dst_train, args, fraction, random_seed, device,task_id, epochs,**kwargs)
         self._device = device
         self.balance = balance
 

@@ -16,15 +16,30 @@ import ot
 from torch import nn
 import copy
 
+import selection
+from selection.forgetting import Forgetting
+from selection.submodular import Submodular
+from selection.glister import Glister
+from selection.grand import GraNd
+from selection.herding import Herding
+from selection.kcentergreedy import kCenterGreedy
+from selection.uncertainty import Uncertainty
+from selection.craig import Craig
+from selection.gradmatch import GradMatch
+from selection.deepfool import DeepFool
+
+from torch.utils.data import ConcatDataset
+
 EPSILON = 1e-8
 
-epochs = 160
+epochs = 1
 lrate = 0.1
 milestones = [80, 120]
 lrate_decay = 0.1
 batch_size = 128
 memory_size = 2000
 T = 2
+num_workers = 8
 
 
 class COIL(BaseLearner):
@@ -116,7 +131,7 @@ class COIL(BaseLearner):
         )
         return transformed_hat_W * len(former_class_means) * self.calibration_term
 
-    def incremental_train(self, data_manager):
+    def incremental_train(self, data_manager,args):
         self._cur_task += 1
         self._total_classes = self._known_classes + data_manager.get_task_size(
             self._cur_task
@@ -136,9 +151,36 @@ class COIL(BaseLearner):
             mode="train",
             appendent=self._get_memory(),
         )
-        self.train_loader = DataLoader(
-            train_dataset, batch_size=batch_size, shuffle=True, num_workers=4
-        )
+        selection_args = dict(epochs=args["selection_epochs"],
+                              selection_method=args["uncertainty"],
+                              balance=args["balance"],
+                              greedy=args["submodular_greedy"],
+                              function=args["submodular"]
+                              )
+        method = Submodular(self._network, train_dataset, args, args["fraction"], args["seed"], self._device, self._cur_task, **selection_args)
+        subset = method.select()
+        dst_subset = torch.utils.data.Subset(train_dataset, subset["indices"])
+        if self._cur_task > 0:
+            memory_set = data_manager.get_dataset(
+                [],
+                source="train",
+                mode="train",
+                appendent=self._get_memory()
+            )
+
+            concatenated_dataset = ConcatDataset([memory_set, dst_subset])
+            # print(len(concatenated_dataset))
+
+            self.train_loader = DataLoader(
+                concatenated_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers
+            )
+            # print(len(self.train_loader))
+        else:
+
+            self.train_loader = DataLoader(
+                dst_subset, batch_size=batch_size, shuffle=True, num_workers=num_workers
+            )
+            # print(len(self.train_loader))
         test_dataset = data_manager.get_dataset(
             np.arange(0, self._total_classes), source="test", mode="test"
         )
@@ -163,6 +205,8 @@ class COIL(BaseLearner):
         self._update_representation(train_loader, test_loader, optimizer, scheduler)
 
     def _update_representation(self, train_loader, test_loader, optimizer, scheduler):
+        for p in self._network.parameters():
+            p.requires_grad_(True)
         prog_bar = tqdm(range(epochs))
         for _, epoch in enumerate(prog_bar):
             weight_ot_init = max(1.0 - (epoch / 2) ** 2, 0)
@@ -173,6 +217,7 @@ class COIL(BaseLearner):
             correct, total = 0, 0
 
             for i, (_, inputs, targets) in enumerate(train_loader):
+                targets = targets.type(torch.LongTensor)
                 inputs, targets = inputs.to(self._device), targets.to(self._device)
                 output = self._network(inputs)
                 logits = output["logits"]

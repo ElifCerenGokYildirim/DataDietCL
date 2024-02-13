@@ -1,5 +1,6 @@
 import copy
-
+import os
+os.environ["KMP_DUPLICATE_LIB_OK"]="TRUE"
 from .earlytrain import EarlyTrain
 import numpy as np
 import torch
@@ -69,7 +70,9 @@ class Submodular(EarlyTrain):
             inputs, targets = inputs.to(self._device), targets.to(self._device)
 
             outputs = self._model(inputs)["logits"]
+
             loss = self.criterion(outputs.requires_grad_(True), targets).sum()
+
             batch_num = targets.shape[0]
 
             with torch.no_grad():
@@ -86,6 +89,8 @@ class Submodular(EarlyTrain):
                                             dim=1).cpu().numpy())
 
         gradients = np.concatenate(gradients, axis=0)
+        #print("grads", gradients)
+
         return gradients
 
     def finish_run(self):
@@ -93,12 +98,13 @@ class Submodular(EarlyTrain):
         # Turn on the embedding recorder and the no_grad flag
         with self.model.embedding_recorder:
             self._model = copy.deepcopy(self.model)
+            #print("model",self._model)
             self._model.no_grad = True
             self.train_indx = np.arange(self.n_train)
 
             if self.balance:
                 selection_result = np.array([], dtype=np.int64)
-                print("current task id", self.task_id)
+                #print("current task id", self.task_id)
                 start_label = self.task_id * 10
                 end_label = (self.task_id + 1) * 10
                 for c in range(start_label, end_label):
@@ -109,11 +115,15 @@ class Submodular(EarlyTrain):
                     # Instantiate a submodular function
                     submod_function = submodular_function.__dict__[self._function](index=c_indx,
                                         similarity_kernel=lambda a, b:cossim_np(gradients[a], gradients[b]))
+
+                    #print("similartiy kernel", submod_function.similarity_kernel)
+
                     submod_optimizer = submodular_optimizer.__dict__[self._greedy](args=self.args,
                                         index=c_indx, budget=round(self.fraction * len(c_indx)), already_selected=[])
 
                     c_selection_result = submod_optimizer.select(gain_function=submod_function.calc_gain,
                                                                  update_state=submod_function.update_state)
+                    #print("Passed1")
                     selection_result = np.append(selection_result, c_selection_result)
             else:
                 # Calculate gradients into a matrix

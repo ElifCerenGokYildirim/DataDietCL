@@ -11,16 +11,29 @@ from models.base import BaseLearner
 from utils.inc_net import DERNet, IncrementalNet
 from utils.toolkit import count_parameters, target2onehot, tensor2numpy
 
+from selection.forgetting import Forgetting
+from selection.submodular import Submodular
+from selection.glister import Glister
+from selection.grand import GraNd
+from selection.herding import Herding
+from selection.kcentergreedy import kCenterGreedy
+from selection.uncertainty import Uncertainty
+from selection.craig import Craig
+from selection.gradmatch import GradMatch
+from selection.deepfool import DeepFool
+
+from torch.utils.data import ConcatDataset
+
 EPSILON = 1e-8
 
-init_epoch = 200
+init_epoch = 1
 init_lr = 0.1
 init_milestones = [60, 120, 170]
 init_lr_decay = 0.1
 init_weight_decay = 0.0005
 
 
-epochs = 170
+epochs = 1
 lrate = 0.1
 milestones = [80, 120, 150]
 lrate_decay = 0.1
@@ -28,7 +41,6 @@ batch_size = 128
 weight_decay = 2e-4
 num_workers = 8
 T = 2
-
 
 class DER(BaseLearner):
     def __init__(self, args):
@@ -39,7 +51,7 @@ class DER(BaseLearner):
         self._known_classes = self._total_classes
         logging.info("Exemplar size: {}".format(self.exemplar_size))
 
-    def incremental_train(self, data_manager):
+    def incremental_train(self, data_manager,args):
         self._cur_task += 1
         self._total_classes = self._known_classes + data_manager.get_task_size(
             self._cur_task
@@ -65,9 +77,38 @@ class DER(BaseLearner):
             mode="train",
             appendent=self._get_memory(),
         )
-        self.train_loader = DataLoader(
-            train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers
-        )
+        selection_args = dict(epochs=args["selection_epochs"],
+                              selection_method=args["uncertainty"],
+                              balance=args["balance"],
+                              greedy=args["submodular_greedy"],
+                              function=args["submodular"]
+                              )
+        selection_method = DeepFool(self._network, train_dataset, args, args["fraction"], args["seed"], self._device,
+                          self._cur_task, **selection_args)
+        subset = selection_method.select()
+        dst_subset = torch.utils.data.Subset(train_dataset, subset["indices"])
+        if self._cur_task > 0:
+            memory_set = data_manager.get_dataset(
+                [],
+                source="train",
+                mode="train",
+                appendent=self._get_memory()
+            )
+
+            concatenated_dataset = ConcatDataset([memory_set, dst_subset])
+            # print(len(concatenated_dataset))
+
+            self.train_loader = DataLoader(
+                concatenated_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers
+            )
+            # print(len(self.train_loader))
+        else:
+
+            self.train_loader = DataLoader(
+                dst_subset, batch_size=batch_size, shuffle=True, num_workers=num_workers
+            )
+            # print(len(self.train_loader))
+
         test_dataset = data_manager.get_dataset(
             np.arange(0, self._total_classes), source="test", mode="test"
         )
@@ -77,6 +118,17 @@ class DER(BaseLearner):
 
         if len(self._multiple_gpus) > 1:
             self._network = nn.DataParallel(self._network, self._multiple_gpus)
+
+        # FOR THE DEEPFOOL METHOD
+        if selection_method == DeepFool:
+            print("HERE")
+            for p in self._network.parameters():
+                p.requires_grad_(True)
+            if self._cur_task > 0:
+                for i in range(self._cur_task):
+                    for p in self._network.convnets[i].parameters():
+                        p.requires_grad = False
+
         self._train(self.train_loader, self.test_loader)
         self.build_rehearsal_memory(data_manager, self.samples_per_class)
         if len(self._multiple_gpus) > 1:
@@ -89,6 +141,8 @@ class DER(BaseLearner):
         else:
             self._network_module_ptr = self._network
         self._network_module_ptr.convnets[-1].train()
+        #print("len network ptr",len(self._network_module_ptr.convnets))
+
         if self._cur_task >= 1:
             for i in range(self._cur_task):
                 self._network_module_ptr.convnets[i].eval()
@@ -125,12 +179,15 @@ class DER(BaseLearner):
                 self._network.weight_align(self._total_classes - self._known_classes)
 
     def _init_train(self, train_loader, test_loader, optimizer, scheduler):
+        #for p in self._network.parameters():
+            #p.requires_grad_(True)
         prog_bar = tqdm(range(init_epoch))
         for _, epoch in enumerate(prog_bar):
             self.train()
             losses = 0.0
             correct, total = 0, 0
             for i, (_, inputs, targets) in enumerate(train_loader):
+                targets = targets.type(torch.LongTensor)
                 inputs, targets = inputs.to(self._device), targets.to(self._device)
                 logits = self._network(inputs)["logits"]
 
@@ -170,6 +227,8 @@ class DER(BaseLearner):
         logging.info(info)
 
     def _update_representation(self, train_loader, test_loader, optimizer, scheduler):
+        #for p in self._network.parameters():
+            #p.requires_grad_(True)
         prog_bar = tqdm(range(epochs))
         for _, epoch in enumerate(prog_bar):
             self.train()
@@ -178,6 +237,7 @@ class DER(BaseLearner):
             losses_aux = 0.0
             correct, total = 0, 0
             for i, (_, inputs, targets) in enumerate(train_loader):
+                targets = targets.type(torch.LongTensor)
                 inputs, targets = inputs.to(self._device), targets.to(self._device)
                 outputs = self._network(inputs)
                 logits, aux_logits = outputs["logits"], outputs["aux_logits"]
@@ -190,7 +250,6 @@ class DER(BaseLearner):
                 )
                 loss_aux = F.cross_entropy(aux_logits, aux_targets)
                 loss = loss_clf + loss_aux
-
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()

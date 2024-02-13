@@ -79,7 +79,7 @@ class iCaRL(BaseLearner):
 
                            )
 
-        method = DeepFool(self._network, train_dataset, args, args["fraction"], args["seed"], self._device, self._cur_task, **selection_args)
+        method = Forgetting(self._network, train_dataset, args, args["fraction"], args["seed"], self._device, self._cur_task, **selection_args)
         subset = method.select()
         dst_subset = torch.utils.data.Subset(train_dataset, subset["indices"])
         if self._cur_task > 0:

@@ -16,6 +16,16 @@ from utils.inc_net import SimpleCosineIncrementalNet
 from models.base import BaseLearner
 from utils.toolkit import target2onehot, tensor2numpy
 
+from selection.forgetting import Forgetting
+from selection.submodular import Submodular
+from selection.glister import Glister
+from selection.grand import GraNd
+from selection.herding import Herding
+from selection.kcentergreedy import kCenterGreedy
+from selection.uncertainty import Uncertainty
+from selection.craig import Craig
+from selection.gradmatch import GradMatch
+from selection.deepfool import DeepFool
 
 num_workers = 8
 batch_size = 128
@@ -56,21 +66,34 @@ class SimpleCIL(BaseLearner):
             self._network.fc.weight.data[class_index] = proto
         return model
 
-    def incremental_train(self, data_manager):
+    def incremental_train(self, data_manager,args):
         self._cur_task += 1
         self._total_classes = self._known_classes + data_manager.get_task_size(self._cur_task)
         self._network.update_fc(self._total_classes)
         logging.info("Learning on {}-{}".format(self._known_classes, self._total_classes))
 
         train_dataset = data_manager.get_dataset(np.arange(self._known_classes, self._total_classes),source="train", mode="train", )
+        selection_args = dict(epochs=args["selection_epochs"],
+                              selection_method=args["uncertainty"],
+                              balance=args["balance"],
+                              greedy=args["submodular_greedy"],
+                              function=args["submodular"]
+                              )
+        selection_method = Submodular(self._network, train_dataset, args, args["fraction"], args["seed"], self._device,
+                                    self._cur_task, **selection_args)
+        subset = selection_method.select()
+        dst_subset = torch.utils.data.Subset(train_dataset, subset["indices"])
         self.train_dataset = train_dataset
+        print("len main trainset", len(dst_subset))
         self.data_manager = data_manager
-        self.train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers)
+        self.train_loader = DataLoader(dst_subset, batch_size=batch_size, shuffle=True, num_workers=num_workers)
         test_dataset = data_manager.get_dataset(np.arange(0, self._total_classes), source="test", mode="test" )
         self.test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
 
         train_dataset_for_protonet = data_manager.get_dataset(np.arange(self._known_classes, self._total_classes),source="train", mode="test", )
-        self.train_loader_for_protonet = DataLoader(train_dataset_for_protonet, batch_size=batch_size, shuffle=True, num_workers=num_workers)
+        dst_subset_protonet = torch.utils.data.Subset(train_dataset_for_protonet, subset["indices"])
+        print("len of protonet", len(dst_subset_protonet))
+        self.train_loader_for_protonet = DataLoader(dst_subset_protonet, batch_size=batch_size, shuffle=True, num_workers=num_workers)
 
         if len(self._multiple_gpus) > 1:
             print('Multiple GPUs')
@@ -101,6 +124,7 @@ class SimpleCIL(BaseLearner):
             losses = 0.0
             correct, total = 0, 0
             for i, (_, inputs, targets) in enumerate(train_loader):
+                targets = targets.type(torch.LongTensor)
                 inputs, targets = inputs.to(self._device), targets.to(self._device)
                 logits = self._network(inputs)["logits"]
 

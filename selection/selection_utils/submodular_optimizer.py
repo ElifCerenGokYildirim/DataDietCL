@@ -50,7 +50,6 @@ class LazyGreedy(optimizer):
             assert callable(update_state)
         selected = np.zeros(self.n, dtype=bool)
         selected[self.already_selected] = True
-
         greedy_gain = np.zeros(len(self.index))
         greedy_gain[~selected] = gain_function(~selected, selected, **kwargs)
         greedy_gain[selected] = -np.inf

@@ -10,6 +10,19 @@ from models.base import BaseLearner
 from utils.inc_net import FOSTERNet
 from utils.toolkit import count_parameters, target2onehot, tensor2numpy
 
+from selection.forgetting import Forgetting
+from selection.submodular import Submodular
+from selection.glister import Glister
+from selection.grand import GraNd
+from selection.herding import Herding
+from selection.kcentergreedy import kCenterGreedy
+from selection.uncertainty import Uncertainty
+from selection.craig import Craig
+from selection.gradmatch import GradMatch
+from selection.deepfool import DeepFool
+
+from torch.utils.data import ConcatDataset
+
 # Please refer to https://github.com/G-U-N/ECCV22-FOSTER for the full source code to reproduce foster.
 
 EPSILON = 1e-8
@@ -34,7 +47,7 @@ class FOSTER(BaseLearner):
         self._known_classes = self._total_classes
         logging.info("Exemplar size: {}".format(self.exemplar_size))
 
-    def incremental_train(self, data_manager):
+    def incremental_train(self, data_manager,args):
         self.data_manager = data_manager
         self._cur_task += 1
         if self._cur_task > 1:
@@ -65,13 +78,37 @@ class FOSTER(BaseLearner):
             mode="train",
             appendent=self._get_memory(),
         )
-        self.train_loader = DataLoader(
-            train_dataset,
-            batch_size=self.args["batch_size"],
-            shuffle=True,
-            num_workers=self.args["num_workers"],
-            pin_memory=True,
-        )
+        selection_args = dict(epochs=args["selection_epochs"],
+                              selection_method=args["uncertainty"],
+                              balance=args["balance"],
+                              greedy=args["submodular_greedy"],
+                              function=args["submodular"]
+                              )
+        method = Herding(self._network, train_dataset, args, args["fraction"], args["seed"], self._device,
+                            self._cur_task, **selection_args)
+        subset = method.select()
+        dst_subset = torch.utils.data.Subset(train_dataset, subset["indices"])
+        if self._cur_task > 0:
+            memory_set = data_manager.get_dataset(
+                [],
+                source="train",
+                mode="train",
+                appendent=self._get_memory()
+            )
+
+            concatenated_dataset = ConcatDataset([memory_set, dst_subset])
+            # print(len(concatenated_dataset))
+
+            self.train_loader = DataLoader(
+                concatenated_dataset, batch_size=self.args["batch_size"], shuffle=True, num_workers=self.args["num_workers"]
+            )
+            # print(len(self.train_loader))
+        else:
+
+            self.train_loader = DataLoader(
+                dst_subset, batch_size=self.args["batch_size"], shuffle=True, num_workers=self.args["num_workers"]
+            )
+            # print(len(self.train_loader))
         test_dataset = data_manager.get_dataset(
             np.arange(0, self._total_classes), source="test", mode="test"
         )
@@ -173,6 +210,7 @@ class FOSTER(BaseLearner):
             losses = 0.0
             correct, total = 0, 0
             for i, (_, inputs, targets) in enumerate(train_loader):
+                targets = targets.type(torch.LongTensor)
                 inputs, targets = inputs.to(
                     self._device, non_blocking=True
                 ), targets.to(self._device, non_blocking=True)
@@ -220,6 +258,7 @@ class FOSTER(BaseLearner):
             losses_kd = 0.0
             correct, total = 0, 0
             for i, (_, inputs, targets) in enumerate(train_loader):
+                targets = targets.type(torch.LongTensor)
                 inputs, targets = inputs.to(
                     self._device, non_blocking=True
                 ), targets.to(self._device, non_blocking=True)
@@ -314,6 +353,7 @@ class FOSTER(BaseLearner):
             losses = 0.0
             correct, total = 0, 0
             for i, (_, inputs, targets) in enumerate(train_loader):
+                targets = targets.type(torch.LongTensor)
                 inputs, targets = inputs.to(
                     self._device, non_blocking=True
                 ), targets.to(self._device, non_blocking=True)
